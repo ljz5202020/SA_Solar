@@ -1,0 +1,33 @@
+# 底图 / 影像 tiles（太大，不同步）
+tiles/*.tif
+tiles/*.vrt
+
+# QGIS 项目文件
+*.qgz
+*.qgs
+*.qgs~
+
+# GeoPackage 数据文件（标注真值 + 任务网格）
+*.gpkg
+*.geojson
+
+# 检测结果（可重新生成）
+results/
+
+# 建筑轮廓数据（可重新生成）
+buildings.gpkg
+tile_manifest.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# 运行日志
+run_output.txt
+
+# OS
+.DS_Store
+Thumbs.db
