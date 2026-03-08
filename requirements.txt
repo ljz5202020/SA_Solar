@@ -1,0 +1,10 @@
+geoai-py
+geopandas
+shapely
+scikit-learn
+matplotlib
+seaborn
+rasterio
+rasterstats
+osmnx
+requests

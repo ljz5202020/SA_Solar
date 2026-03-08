@@ -33,18 +33,23 @@ warnings.filterwarnings("ignore")
 # 配置常量
 # ════════════════════════════════════════════════════════════════════════
 BASE_DIR      = Path(__file__).parent
-TILES_DIR     = BASE_DIR / "tiles"
-GT_GPKG       = BASE_DIR / "G1238.gpkg"
-GT_GEOJSON    = BASE_DIR / "g1238.geojson"
-OUTPUT_DIR    = BASE_DIR / "results"
+GRID_ID       = "G1238"
+TILES_DIR     = BASE_DIR / "tiles" / GRID_ID
+GT_GPKG       = BASE_DIR / "data" / "annotations" / f"{GRID_ID}.gpkg"
+GT_GEOJSON    = BASE_DIR / "data" / "annotations" / f"{GRID_ID.lower()}.geojson"
+OUTPUT_DIR    = BASE_DIR / "results" / GRID_ID
+MASKS_DIR     = OUTPUT_DIR / "masks"
+VECTORS_DIR   = OUTPUT_DIR / "vectors"
 BUILDINGS_GPKG = BASE_DIR / "buildings.gpkg"
 
 # geoai 检测参数
-CONFIDENCE_THRESHOLD = 0.6
-MASK_THRESHOLD       = 0.6
-MIN_OBJECT_AREA      = 8      # min area (m^2) — raised from 6 to reduce FP
-MAX_ELONGATION       = 6      # 最大长宽比 — tightened from 10
-MIN_SOLIDITY         = 0.7    # 最小 solidity（太阳能板形状规则）
+CONFIDENCE_THRESHOLD = 0.3
+MASK_THRESHOLD       = 0.3
+MIN_OBJECT_AREA      = 2      # 后处理面积过滤（m²），<2m² 几乎全是碎片
+MAX_ELONGATION       = 4.0    # 后处理长宽比过滤，>4 几乎全是误检
+MIN_SOLIDITY         = 0.0    # 暂不限制 solidity（TP/FP 分布重叠太大）
+SHADOW_RGB_THRESH    = 60     # RGB 三通道均 < 此值视为阴影
+POST_CONF_THRESHOLD  = 0.70   # 后处理置信度过滤（基于 mask band2 回填值）
 OVERLAP              = 0.25
 CHIP_SIZE            = (400, 400)
 BATCH_SIZE           = 4
@@ -52,7 +57,7 @@ BATCH_SIZE           = 4
 # 评估参数
 IOU_THRESHOLDS       = [0.1, 0.2, 0.3, 0.5, 0.7]
 DEFAULT_IOU          = 0.3
-TARGET_CRS           = "EPSG:32734"  # UTM Zone 34S（开普敦适用）
+TARGET_CRS           = "EPSG:4326"  # WGS 84（开普敦适用）
 
 # 输出文件路径
 PREDICTIONS_PATH         = OUTPUT_DIR / "predictions.geojson"
@@ -108,21 +113,38 @@ def spatial_nms(gdf: gpd.GeoDataFrame, iou_threshold: float = 0.5) -> gpd.GeoDat
 # ════════════════════════════════════════════════════════════════════════
 # 第一步：检测太阳能板
 # ════════════════════════════════════════════════════════════════════════
-def detect_solar_panels() -> gpd.GeoDataFrame:
+def detect_solar_panels(
+    chip_size=None,
+    overlap=None,
+    min_object_area=None,
+    confidence_threshold=None,
+    mask_threshold=None,
+    output_dir=None,
+) -> gpd.GeoDataFrame:
     """
     使用 geoai SolarPanelDetector 对每张 GeoTIFF 进行检测。
-    提供两种路径：
-      路径 A：geoai.SolarPanelDetector（官方高层 API）
-      路径 B：samgeo.SamGeo 作为备选
+    参数可覆盖模块级常量，用于参数搜索。
     """
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _chip_size = chip_size or CHIP_SIZE
+    _overlap = overlap if overlap is not None else OVERLAP
+    _min_object_area = min_object_area if min_object_area is not None else MIN_OBJECT_AREA
+    _confidence_threshold = confidence_threshold if confidence_threshold is not None else CONFIDENCE_THRESHOLD
+    _mask_threshold = mask_threshold if mask_threshold is not None else MASK_THRESHOLD
+    _output_dir = Path(output_dir) if output_dir else OUTPUT_DIR
+    _masks_dir = _output_dir / "masks"
+    _vectors_dir = _output_dir / "vectors"
+    _predictions_path = _output_dir / "predictions.geojson"
+
+    _output_dir.mkdir(parents=True, exist_ok=True)
+    _masks_dir.mkdir(parents=True, exist_ok=True)
+    _vectors_dir.mkdir(parents=True, exist_ok=True)
 
     # 只处理带有地理参考信息的 _geo.tif 文件
-    geo_tifs = sorted(TILES_DIR.glob("G1238_*_*_geo.tif"))
+    geo_tifs = sorted(TILES_DIR.glob(f"{GRID_ID}_*_*_geo.tif"))
     if not geo_tifs:
         # 回退到普通 .tif（不包含 _geo 后缀且不含 mosaic/mask 等关键词）
         geo_tifs = sorted([
-            f for f in TILES_DIR.glob("G1238_*_*.tif")
+            f for f in TILES_DIR.glob(f"{GRID_ID}_*_*.tif")
             if "_geo" not in f.stem and "mosaic" not in f.stem and "mask" not in f.stem
         ])
 
@@ -177,21 +199,21 @@ def detect_solar_panels() -> gpd.GeoDataFrame:
 
             try:
                 # 生成掩膜 → 矢量化
-                mask_path = OUTPUT_DIR / f"{tile_name}_mask.tif"
+                mask_path = _masks_dir / f"{tile_name}_mask.tif"
                 masks_result = detector.generate_masks(
                     str(tif_path),
                     output_path=str(mask_path),
-                    confidence_threshold=CONFIDENCE_THRESHOLD,
-                    mask_threshold=MASK_THRESHOLD,
-                    min_object_area=MIN_OBJECT_AREA,
-                    overlap=OVERLAP,
-                    chip_size=CHIP_SIZE,
+                    confidence_threshold=_confidence_threshold,
+                    mask_threshold=_mask_threshold,
+                    min_object_area=_min_object_area,
+                    overlap=_overlap,
+                    chip_size=_chip_size,
                     batch_size=BATCH_SIZE,
                     verbose=False,
                 )
 
                 # 矢量化：正交化多边形
-                vector_path = OUTPUT_DIR / f"{tile_name}_vectors.geojson"
+                vector_path = _vectors_dir / f"{tile_name}_vectors.geojson"
                 gdf_tile = geoai.orthogonalize(
                     input_path=masks_result,
                     output_path=str(vector_path),
@@ -199,58 +221,45 @@ def detect_solar_panels() -> gpd.GeoDataFrame:
                 )
 
                 if gdf_tile is not None and len(gdf_tile) > 0:
-                    # --- 新增: 提取RGB颜色统计过滤误检 (阴影、泳池、汽车等) ---
-                    # 注意：必须在 add_geometric_properties 之前执行，因为它会改变预测框的投影(转为米)
+                    # --- 从 mask band 2 回填 confidence ---
+                    try:
+                        import rasterstats as _rs
+                        _conf_stats = _rs.zonal_stats(
+                            gdf_tile, str(mask_path), band=2,
+                            stats=["mean"], nodata=0,
+                        )
+                        gdf_tile["confidence"] = [
+                            (s["mean"] / 255.0) if s["mean"] is not None else 0.0
+                            for s in _conf_stats
+                        ]
+                    except Exception as _e:
+                        print(f"    [WARN] confidence 回填失败: {_e}")
+
+                    # --- 颜色过滤：去除阴影和反光 ---
                     try:
                         import rasterstats
-                        
-                        # 获取多边形的均值 R, G, B
                         stats_r = rasterstats.zonal_stats(gdf_tile, str(tif_path), band=1, stats=['mean'], nodata=0)
                         stats_g = rasterstats.zonal_stats(gdf_tile, str(tif_path), band=2, stats=['mean'], nodata=0)
                         stats_b = rasterstats.zonal_stats(gdf_tile, str(tif_path), band=3, stats=['mean'], nodata=0)
-                        
                         gdf_tile["mean_r"] = [s['mean'] if s['mean'] is not None else 0 for s in stats_r]
                         gdf_tile["mean_g"] = [s['mean'] if s['mean'] is not None else 0 for s in stats_g]
                         gdf_tile["mean_b"] = [s['mean'] if s['mean'] is not None else 0 for s in stats_b]
-                        
-                        # 过滤规则：
-                        # 1. 阴影通常非常暗 (RGB均小于45) — 降低阈值避免误删深色面板
-                        is_shadow = (gdf_tile["mean_r"] < 45) & (gdf_tile["mean_g"] < 45) & (gdf_tile["mean_b"] < 45)
 
-                        # 2. 泳池和部分蓝色车 (B 显著大于 R，并且亮度适中)
-                        is_pool = (gdf_tile["mean_b"] > gdf_tile["mean_r"] + 20) & (gdf_tile["mean_b"] > gdf_tile["mean_g"] + 10)
+                        # 阴影过滤（RGB 三通道均低于阈值）+ 过曝过滤
+                        is_shadow = ((gdf_tile["mean_r"] < SHADOW_RGB_THRESH)
+                                     & (gdf_tile["mean_g"] < SHADOW_RGB_THRESH)
+                                     & (gdf_tile["mean_b"] < SHADOW_RGB_THRESH))
+                        is_too_bright = (gdf_tile["mean_r"] > 250) & (gdf_tile["mean_g"] > 250) & (gdf_tile["mean_b"] > 250)
+                        valid_mask = ~(is_shadow | is_too_bright)
 
-                        # 3. 浅色汽车 / 反光 (极亮)
-                        is_too_bright = (gdf_tile["mean_r"] > 240) & (gdf_tile["mean_g"] > 240) & (gdf_tile["mean_b"] > 240)
-
-                        # 4. 植被 (G 显著高于 R 和 B)
-                        is_vegetation = (gdf_tile["mean_g"] > gdf_tile["mean_r"] + 15) & (gdf_tile["mean_g"] > gdf_tile["mean_b"] + 15) & (gdf_tile["mean_g"] > 80)
-                        
-                        valid_mask = ~(is_shadow | is_pool | is_too_bright | is_vegetation)
-                        
                         pre_count = len(gdf_tile)
                         gdf_tile = gdf_tile[valid_mask].copy()
                         if pre_count > len(gdf_tile):
-                            print(f"    -> 颜色过滤: 移除了 {pre_count - len(gdf_tile)} 个可能为阴影/水池/反光/植被的误检目标")
+                            print(f"    -> 颜色过滤: 移除了 {pre_count - len(gdf_tile)} 个极端阴影/反光")
                     except Exception as e:
-                        print(f"    [WARN] RGB统计过滤失败: {e}")
-                    
-                    if len(gdf_tile) > 0:
-                        # --- 建筑轮廓掩膜：只保留与建筑相交的检测结果 ---
-                        if bldg_union_cache is not None:
-                            try:
-                                tile_crs_str = str(gdf_tile.crs)
-                                if tile_crs_str not in bldg_union_cache:
-                                    bldg_reproj = bldg_utm.to_crs(gdf_tile.crs)
-                                    bldg_union_cache[tile_crs_str] = unary_union(bldg_reproj.geometry)
-                                bldg_union_geom = bldg_union_cache[tile_crs_str]
+                        print(f"    [WARN] RGB过滤失败: {e}")
 
-                                pre_bldg = len(gdf_tile)
-                                gdf_tile = gdf_tile[gdf_tile.geometry.intersects(bldg_union_geom)].copy()
-                                if pre_bldg > len(gdf_tile):
-                                    print(f"    -> 建筑掩膜: 移除了 {pre_bldg - len(gdf_tile)} 个非屋顶目标")
-                            except Exception as e:
-                                print(f"    [WARN] 建筑掩膜过滤失败: {e}")
+                    # --- 建筑掩膜已禁用（OSM 数据滞后） ---
 
                     if len(gdf_tile) > 0:
                         # 添加几何属性用于后续过滤
@@ -275,21 +284,21 @@ def detect_solar_panels() -> gpd.GeoDataFrame:
         # 合并所有检测结果
         pred_gdf = pd.concat(all_gdfs, ignore_index=True)
 
-        # 空间 NMS 去重：chip 重叠 25% 导致同一目标被重复检测
+        # 空间 NMS 去重：chip 重叠导致同一目标被重复检测
         pred_gdf = spatial_nms(pred_gdf, iou_threshold=0.5)
 
-        # 过滤：基于面积和形状
+        # 面积过滤
         pre_filter_count = len(pred_gdf)
-        if "area_m2" in pred_gdf.columns and "elongation" in pred_gdf.columns:
-            geo_mask = (
-                (pred_gdf["area_m2"] > MIN_OBJECT_AREA) &
-                (pred_gdf["elongation"] < MAX_ELONGATION)
-            )
-            # solidity 过滤：太阳能板形状规则，不规则形状多为误检
-            if "solidity" in pred_gdf.columns:
-                geo_mask = geo_mask & (pred_gdf["solidity"] > MIN_SOLIDITY)
-            pred_gdf = pred_gdf[geo_mask].copy()
-            print(f"\n过滤后: {len(pred_gdf)} / {pre_filter_count} 个多边形保留")
+        if "area_m2" in pred_gdf.columns:
+            pred_gdf = pred_gdf[pred_gdf["area_m2"] >= _min_object_area].copy()
+
+        # 长宽比过滤：去除细长条状误检
+        if "elongation" in pred_gdf.columns and MAX_ELONGATION < 999:
+            pred_gdf = pred_gdf[pred_gdf["elongation"] <= MAX_ELONGATION].copy()
+
+        post_filter_count = len(pred_gdf)
+        print(f"\n后处理过滤: {post_filter_count} / {pre_filter_count} 个多边形保留"
+              f"（area>={_min_object_area}m² + elongation<={MAX_ELONGATION}）")
 
         # 确保有 confidence 字段
         if "confidence" not in pred_gdf.columns:
@@ -302,8 +311,14 @@ def detect_solar_panels() -> gpd.GeoDataFrame:
                 print("[INFO] 未找到置信度字段，使用默认值 0.5")
                 pred_gdf["confidence"] = 0.5
 
-        pred_gdf.to_file(str(PREDICTIONS_PATH), driver="GeoJSON")
-        print(f"\n[OK] predictions saved: {PREDICTIONS_PATH}")
+        # 置信度过滤：去除低置信度预测
+        pre_conf_count = len(pred_gdf)
+        pred_gdf = pred_gdf[pred_gdf["confidence"] >= POST_CONF_THRESHOLD].copy()
+        print(f"置信度过滤: {len(pred_gdf)} / {pre_conf_count} 个多边形保留"
+              f"（confidence>={POST_CONF_THRESHOLD}）")
+
+        pred_gdf.to_file(str(_predictions_path), driver="GeoJSON")
+        print(f"\n[OK] predictions saved: {_predictions_path}")
         print(f"    总计 {len(pred_gdf)} 个太阳能板检测多边形")
         return pred_gdf
 
@@ -329,8 +344,8 @@ def detect_solar_panels() -> gpd.GeoDataFrame:
             print(f"  [{idx}/{len(geo_tifs)}] 检测中: {tile_name}")
 
             try:
-                mask_path = OUTPUT_DIR / f"{tile_name}_sam_mask.tif"
-                vector_path = OUTPUT_DIR / f"{tile_name}_sam_vectors.geojson"
+                mask_path = _masks_dir / f"{tile_name}_sam_mask.tif"
+                vector_path = _vectors_dir / f"{tile_name}_sam_vectors.geojson"
 
                 sam.set_image(str(tif_path))
                 sam.text_predict(
@@ -358,8 +373,8 @@ def detect_solar_panels() -> gpd.GeoDataFrame:
             sys.exit(1)
 
         pred_gdf = pd.concat(all_gdfs, ignore_index=True)
-        pred_gdf.to_file(str(PREDICTIONS_PATH), driver="GeoJSON")
-        print(f"\n[OK] predictions saved: {PREDICTIONS_PATH}")
+        pred_gdf.to_file(str(_predictions_path), driver="GeoJSON")
+        print(f"\n[OK] predictions saved: {_predictions_path}")
         return pred_gdf
 
     except ImportError:
@@ -380,8 +395,21 @@ def load_ground_truth() -> gpd.GeoDataFrame:
     gt = None
     if GT_GPKG.exists():
         try:
-            gt = gpd.read_file(str(GT_GPKG))
-            print(f"  已加载 GPKG: {GT_GPKG.name} ({len(gt)} 个多边形)")
+            import pyogrio
+            layers = pyogrio.list_layers(str(GT_GPKG))
+            if len(layers) > 1:
+                # 多图层时，读取多边形数量最多的图层
+                best_layer, best_count = None, 0
+                for layer_name, _ in layers:
+                    gdf_tmp = gpd.read_file(str(GT_GPKG), layer=layer_name)
+                    print(f"  图层 '{layer_name}': {len(gdf_tmp)} 个多边形")
+                    if len(gdf_tmp) > best_count:
+                        best_layer, best_count = layer_name, len(gdf_tmp)
+                        gt = gdf_tmp
+                print(f"  → 选择图层 '{best_layer}' ({best_count} 个多边形)")
+            else:
+                gt = gpd.read_file(str(GT_GPKG))
+                print(f"  已加载 GPKG: {GT_GPKG.name} ({len(gt)} 个多边形)")
         except Exception as e:
             print(f"  [WARNING] 读取 GPKG 失败: {e}")
 
@@ -607,10 +635,10 @@ def evaluate_per_tile(gt: gpd.GeoDataFrame,
     """
     import rasterio
 
-    geo_tifs = sorted(TILES_DIR.glob("G1238_*_*_geo.tif"))
+    geo_tifs = sorted(TILES_DIR.glob(f"{GRID_ID}_*_*_geo.tif"))
     if not geo_tifs:
         geo_tifs = sorted([
-            f for f in TILES_DIR.glob("G1238_*_*.tif")
+            f for f in TILES_DIR.glob(f"{GRID_ID}_*_*.tif")
             if "_geo" not in f.stem and "mosaic" not in f.stem
         ])
 
@@ -802,6 +830,89 @@ def plot_iou_threshold_metrics(metrics_df: pd.DataFrame):
 
 
 # ════════════════════════════════════════════════════════════════════════
+# 误检/漏检分类分析
+# ════════════════════════════════════════════════════════════════════════
+ERROR_ANALYSIS_PATH = OUTPUT_DIR / "error_analysis.csv"
+FN_ANALYSIS_PATH    = OUTPUT_DIR / "fn_analysis.csv"
+
+
+def analyze_errors(gt: gpd.GeoDataFrame,
+                   pred: gpd.GeoDataFrame,
+                   pred_classified: gpd.GeoDataFrame) -> None:
+    """
+    对 FP 和 FN 进行分类分析，输出 CSV 和控制台汇总。
+    FP 分类基于 RGB 均值和几何属性；FN 按面积分档。
+    """
+    print("\n" + "=" * 60)
+    print("误检/漏检分类分析 (Error Analysis)...")
+
+    # ── FP 分类 ─────────────────────────────────────────────────────
+    fp = pred_classified[~pred_classified["is_tp"]].copy()
+
+    fp["error_type"] = "other"
+
+    # 1) 极暗 → shadow
+    is_shadow = (fp["mean_r"] < 50) & (fp["mean_g"] < 50) & (fp["mean_b"] < 50)
+    fp.loc[is_shadow, "error_type"] = "shadow"
+
+    # 2) 偏暗 → dark_object
+    is_dark = ((fp["mean_r"] < 70) & (fp["mean_g"] < 70) & (fp["mean_b"] < 70)
+               & (fp["error_type"] == "other"))
+    fp.loc[is_dark, "error_type"] = "dark_object"
+
+    # 3) 蓝色偏高 → blue_object（泳池/蓝车/蓝屋顶）
+    has_blue = (fp["mean_b"] > fp["mean_r"] * 1.3) & (fp["error_type"] == "other")
+    fp.loc[has_blue, "error_type"] = "blue_object"
+
+    # 4) 面积过小 → small_fragment
+    is_small = (fp["area_m2"] < 3) & (fp["error_type"] == "other")
+    fp.loc[is_small, "error_type"] = "small_fragment"
+
+    # 5) 过于细长 → elongated
+    is_elongated = (fp["elongation"] > 4) & (fp["error_type"] == "other")
+    fp.loc[is_elongated, "error_type"] = "elongated"
+
+    # 保存 FP 分析
+    fp_out_cols = ["source_tile", "error_type", "mean_r", "mean_g", "mean_b",
+                   "area_m2", "elongation", "solidity"]
+    fp_out = fp[[c for c in fp_out_cols if c in fp.columns]].copy()
+    fp_out.to_csv(str(ERROR_ANALYSIS_PATH), index=False, encoding="utf-8-sig")
+
+    print(f"\n  FP 分类统计 ({len(fp)} 个误检):")
+    for etype, count in fp["error_type"].value_counts().items():
+        pct = count / len(fp) * 100
+        print(f"    {etype:20s}: {count:3d} ({pct:.1f}%)")
+
+    # ── FN 分析 ─────────────────────────────────────────────────────
+    metrics = iou_matching(gt, pred, iou_threshold=DEFAULT_IOU)
+    fn_gt = gt.loc[~gt.index.isin(metrics["matched_gt_indices"])].copy()
+
+    if len(fn_gt) > 0:
+        # 计算面积（投影到 UTM 34S）
+        fn_utm = fn_gt.to_crs("EPSG:32734")
+        fn_gt["area_m2"] = fn_utm.geometry.area
+
+        fn_gt["size_class"] = pd.cut(
+            fn_gt["area_m2"],
+            bins=[0, 5, 20, 50, float("inf")],
+            labels=["<5m2", "5-20m2", "20-50m2", ">50m2"],
+        )
+
+        fn_out = fn_gt[["area_m2", "size_class"]].copy()
+        fn_out.to_csv(str(FN_ANALYSIS_PATH), index=False, encoding="utf-8-sig")
+
+        print(f"\n  FN 面积分布 ({len(fn_gt)} 个漏检):")
+        for sc, count in fn_gt["size_class"].value_counts().sort_index().items():
+            print(f"    {sc:10s}: {count:3d}")
+        print(f"    mean area: {fn_gt['area_m2'].mean():.1f} m2, "
+              f"median: {fn_gt['area_m2'].median():.1f} m2")
+    else:
+        print("\n  FN: 0 个漏检")
+
+    print(f"\n  [OK] saved: {ERROR_ANALYSIS_PATH.name}, {FN_ANALYSIS_PATH.name}")
+
+
+# ════════════════════════════════════════════════════════════════════════
 # 第六步：汇总报告
 # ════════════════════════════════════════════════════════════════════════
 def print_report(gt: gpd.GeoDataFrame,
@@ -902,6 +1013,9 @@ def main():
 
     # ── Step 4: 分类预测 (TP/FP)（使用合并模式） ─────────────────────
     pred_classified = classify_predictions(gt, pred, iou_threshold=DEFAULT_IOU)
+
+    # ── Step 4b: 误检/漏检分类分析 ────────────────────────────────────
+    analyze_errors(gt, pred, pred_classified)
 
     # ── Step 5: 逐 Tile 评估 ─────────────────────────────────────────
     print("\n" + "=" * 60)
