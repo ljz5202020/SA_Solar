@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -u
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$repo_root" || exit 0
+
+python_cmd="python3"
+if [ -x "$repo_root/.venv/bin/python" ]; then
+  python_cmd="$repo_root/.venv/bin/python"
+fi
+
+if ! "$python_cmd" scripts/progress_tracker.py --from-last-commit --skip-duplicates >/dev/null 2>&1; then
+  echo "[progress-hook] warning: failed to record progress entry" >&2
+fi

@@ -3,6 +3,7 @@
 ## Execution Track
 <!-- progress:roadmap:start -->
 ### Recently Completed
+- 2026-03-18: Restructure project: move shared utils to core/, group scripts by domain
 - 2026-03-18: Added low-resolution grid preview batching for G1240+ screening and contact-sheet generation.
 - 2026-03-18: Added browser review UI for keep/exclude/review decisions with WSL-friendly LAN access hints.
 - 2026-03-18: Completed the first 100-grid preview batch from G1240 and finished manual screening for that batch.

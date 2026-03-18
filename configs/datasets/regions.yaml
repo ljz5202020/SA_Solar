@@ -1,0 +1,57 @@
+# Dataset Registry — Regions & Grids
+# 区域 → grids → 标注源 → 质量等级 → 基线指标
+
+regions:
+  cape_town:
+    description: "Cape Town rooftop solar installations"
+    crs_metric: "EPSG:32734"
+    crs_exchange: "EPSG:4326"
+
+    grids:
+      G1238:
+        annotation_source: "data/annotations/G1238.gpkg"
+        annotation_layer: "g1238__solar_panel__cape_town_g1238_"
+        annotation_count: 123
+        quality_tier: "T1"
+        notes: "QGIS aerial annotation, first complete grid"
+        baseline_metrics:
+          stock_f1: 0.64
+          finetuned_f1_iou03: 0.7789
+          presence_recall_iou01: 0.9268
+
+      G1189:
+        annotation_source: "data/annotations/solarpanel_g0001_g1190.gpkg"
+        annotation_filter: "Name prefix G1189"
+        annotation_count: 58
+        quality_tier: "T2"
+        notes: "Google Earth annotation, corrected alignment"
+        baseline_metrics:
+          stock_recall: 0.33
+          finetuned_f1_iou03: 0.5950
+          presence_recall_iou01: 0.7241
+
+      G1190:
+        annotation_source: "data/annotations/solarpanel_g0001_g1190.gpkg"
+        annotation_filter: "Name prefix G1190"
+        annotation_count: 76
+        quality_tier: "T2"
+        notes: "Google Earth annotation, corrected alignment"
+        baseline_metrics:
+          stock_recall: 0.39
+          finetuned_f1_iou03: 0.6490
+          presence_recall_iou01: 0.7500
+
+  johannesburg:
+    description: "Johannesburg cross-city transfer test"
+    crs_metric: "EPSG:32735"
+    crs_exchange: "EPSG:4326"
+
+    grids:
+      JHB01: { annotation_count: 0, notes: "Transfer test only" }
+      JHB02: { annotation_count: 0, notes: "Transfer test only" }
+      JHB03: { annotation_count: 0, notes: "Transfer test only" }
+      JHB04: { annotation_count: 0, notes: "Transfer test only" }
+      JHB05: { annotation_count: 0, notes: "Transfer test only" }
+      JHB06: { annotation_count: 0, notes: "Transfer test only" }
+    baseline_metrics:
+      macro_recall: 0.281

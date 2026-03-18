@@ -181,12 +181,13 @@ def read_baseline_metrics(grid_id: str) -> dict:
     ]
     size_5_20_recall = float(row_5_20["recall"].iloc[0]) if len(row_5_20) > 0 else None
 
-    # Merge F1@IoU0.3 — need to compute from iou_threshold_metrics or read config
-    # The merge F1 values are stored in STATUS.md, but let's compute from predictions
-    # Actually, we can read them from the existing metrics tables
-    # For now, use the known values from STATUS.md / ROADMAP.md
-    merge_f1_map = {"G1189": 0.5950, "G1190": 0.6490, "G1238": 0.7789}
-    merge_f1 = merge_f1_map.get(grid_id, 0.0)
+    # Merge F1@IoU0.3 — compute dynamically from predictions + GT
+    pipeline.set_grid_context(normalize_grid_id(grid_id))
+    gt = pipeline.load_ground_truth()
+    pred_path = result_dir / "predictions_metric.gpkg"
+    pred = gpd.read_file(str(pred_path))
+    m03 = pipeline.iou_matching(gt, pred, iou_threshold=0.3, merge_preds=True)
+    merge_f1 = round(m03["f1"], 4)
 
     return {
         "merge_f1_iou03": merge_f1,

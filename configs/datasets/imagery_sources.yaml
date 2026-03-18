@@ -1,0 +1,25 @@
+# Imagery Sources
+# 影像源 → 分辨率 → CRS → 下载脚本
+
+sources:
+  cape_town_aerial:
+    description: "City of Cape Town aerial imagery (WMS)"
+    resolution_m: 0.08
+    crs: "EPSG:4326"
+    download_script: "scripts/imagery/download_tiles.py"
+    tile_size_px: 512
+    notes: "High-resolution aerial orthophotos"
+
+  google_earth:
+    description: "Google Earth satellite imagery (manual export)"
+    resolution_m: ~0.3
+    crs: "EPSG:4326"
+    download_script: null
+    notes: "Used for G1189/G1190 annotations; manual screenshot + georeferencing"
+
+  grid_preview:
+    description: "Low-resolution grid preview for screening"
+    resolution_m: ~5.0
+    crs: "EPSG:4326"
+    download_script: "scripts/imagery/grid_preview_batch.py"
+    notes: "Used for rapid visual screening of new grid candidates"

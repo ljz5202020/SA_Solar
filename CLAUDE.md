@@ -4,86 +4,43 @@ Cape Town rooftop solar installation detection & evaluation pipeline. Uses geoai
 
 **Task definition (V1.2)**: installation-level footprint segmentation — one polygon per solar installation, not per panel. See `data/annotations/ANNOTATION_SPEC.md`.
 
-## Directory Structure
+## Key References
 
-```
-data/
-  task_grid.gpkg              — Grid 编号集合
-  annotations/                — 弱监督标注（详见 annotations/README.md）
-    G1238.gpkg                — QGIS 航测图标注 (124 polygons, layer g1238__solar_panel__cape_town_g1238_)
-    solarpanel_g0001_g1190.gpkg — Google Earth 标注（已校准, G1189=58, G1190=76, 其余少量）
-    ANNOTATION_SPEC.md        — V1.2 标注规范（installation footprint 定义）
-    annotation_manifest.csv   — 标注 manifest (quality tier T1/T2, review status)
-  coco/                       — COCO 格式训练数据（export_coco_dataset.py 生成）
-tiles/<GridID>/               — 各 Grid 的航测瓦片（数据目录，禁止放源码）
-results/<GridID>/             — 检测结果、评估报告、图表（数据目录，禁止放源码）
-  masks/                      — per-tile 检测掩膜
-  vectors/                    — per-tile 矢量化结果
-  presence_metrics.csv        — V1.2 installation presence P/R/F1
-  footprint_metrics.csv       — V1.2 footprint IoU/Dice 分布
-  area_error_metrics.csv      — V1.2 面积误差分桶
-checkpoints/                  — 微调模型权重（数据目录，禁止放源码）
-core/
-  grid_utils.py               — Grid 路径/坐标工具函数（共享模块）
-scripts/
-  analysis/
-    param_search.py            — 检测参数网格搜索
-    calibration_sweep.py       — 后处理阈值校准扫描
-    multi_grid_baseline.py     — 多 grid baseline/泛化对比
-  imagery/
-    download_tiles.py          — WMS 瓦片下载 + 地理配准
-    grid_preview_batch.py      — 低分辨率 grid 预览批量生成
-    review_grid_previews.py    — 浏览器交互式 grid 预览审查
-    build_vrt_g1238.py         — G1238 VRT 拼接（legacy helper）
-  annotations/
-    bootstrap_manifest.py      — 从 GPKG 生成初始 annotation manifest
-    prepare_jhb_grids.py       — JHB grid 准备
-```
+- Architecture and directory layout: [`docs/architecture.md`](docs/architecture.md)
+- Workflows (inference, fine-tuning, analysis): [`docs/workflows.md`](docs/workflows.md)
+- Repository rules (Git, directory governance): [`docs/governance/repo-rules.md`](docs/governance/repo-rules.md)
+- Annotation specification: [`data/annotations/ANNOTATION_SPEC.md`](data/annotations/ANNOTATION_SPEC.md)
+- Dataset registry: [`configs/datasets/regions.yaml`](configs/datasets/regions.yaml)
 
-## Scripts
+## Working Constraints
 
-- `detect_and_evaluate.py` — 主流程（检测→过滤→评估→可视化），支持 `--model-path`、`--evaluation-profile`、`--data-scope`
-- `export_coco_dataset.py` — 标注→COCO 实例分割数据集导出（chip 切分 + train/val 划分 + georeferenced chips），支持 `--manifest`、`--tier-filter`、`--category-name`
-- `train.py` — Mask R-CNN 微调训练（两阶段：heads-only → full fine-tune），需要 CUDA GPU
-- `building_filter.py` — OSM+Microsoft 建筑轮廓 → buildings.gpkg + tile_manifest.csv
-- `core/grid_utils.py` — Grid 路径/坐标工具函数
+1. Preserve V1.2 installation-footprint semantics unless the user explicitly requests a task-definition change.
+2. Do not silently switch evaluation profile between `installation` and `legacy_instance`; keep profile selection explicit.
+3. `detect_and_evaluate.py` reuses prior outputs only when `results/<GridID>/config.json` matches current code/parameters. Use `--force` for intentional reruns.
+4. Empty-target chips in exported COCO datasets are intentional hard negatives — do not drop unless explicitly requested.
+5. Never commit large binary files (tiles, checkpoints, results) to git — see `docs/governance/repo-rules.md`.
 
-## Fine-tuning Workflow
+## Environment
+
+- Virtualenv: `./.venv` (create via `./scripts/bootstrap_env.sh`)
+- CUDA GPU required for detection and training; `./scripts/check_env.sh` verifies availability
+- Training dependencies: `torch`, `torchvision`, `opencv-python-headless`, `huggingface_hub`, `pycocotools`
+
+## Quick Commands
 
 ```bash
-# 0. 生成标注 manifest（首次或标注变更后）
-python3 scripts/annotations/bootstrap_manifest.py
+# Environment
+./scripts/bootstrap_env.sh && source scripts/activate_env.sh
 
-# 1. 导出 COCO 数据集（400×400 chips, 0.25 overlap, 80/20 split）
+# Inference (needs GPU)
+python detect_and_evaluate.py
+python detect_and_evaluate.py --model-path checkpoints/best_model.pth --force
+
+# Fine-tuning (needs GPU)
 python export_coco_dataset.py --output-dir data/coco
-
-# 1b. 仅用 T1 标注导出（可选）
-python export_coco_dataset.py --output-dir data/coco_t1 \
-  --manifest data/annotations/annotation_manifest.csv --tier-filter T1
-
-# 2. 训练前检查依赖和 CUDA（train.py 会强制要求 GPU）
-./scripts/check_env.sh
-
-# 3. 训练（需要 CUDA GPU）
 python train.py --coco-dir data/coco --output-dir checkpoints
 
-# 4. 使用微调模型推理 + installation profile 评估
-python detect_and_evaluate.py --model-path checkpoints/best_model.pth --force
+# Evaluation profiles
+python detect_and_evaluate.py --evaluation-profile installation      # default
+python detect_and_evaluate.py --evaluation-profile legacy_instance   # compat
 ```
-
-## Inference
-
-```bash
-python building_filter.py
-python tiles/build_vrt.py
-python detect_and_evaluate.py   # 默认使用 geoai 内置权重, requires GPU
-python detect_and_evaluate.py --model-path checkpoints/best_model.pth  # 微调权重
-
-# V1.2: 选择评估模式
-python detect_and_evaluate.py --evaluation-profile installation  # 默认: 三层指标
-python detect_and_evaluate.py --evaluation-profile legacy_instance  # 旧版兼容
-```
-
-Detection writes `results/<GridID>/config.json` alongside predictions and only reuses prior outputs when the saved config matches current code/parameters. Use `--force` to re-run detection explicitly. V1.2 adds `evaluation_config` section to config.json for traceability.
-
-Training dependencies beyond baseline inference include `torch`, `torchvision`, `opencv-python-headless`, `huggingface_hub`, and `pycocotools`. Empty-target chips are retained in the exported dataset and are intentionally passed through training so the detector learns hard negatives.

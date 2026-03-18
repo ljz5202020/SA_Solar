@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PROGRESS_LOG_PATH = ROOT / "docs" / "progress_log.md"
 ROADMAP_PATH = ROOT / "ROADMAP.md"
 STATUS_PATH = ROOT / "STATUS.md"
+REGIONS_YAML_PATH = ROOT / "configs" / "datasets" / "regions.yaml"
 
 STATUS_START = "<!-- progress:status:start -->"
 STATUS_END = "<!-- progress:status:end -->"
@@ -28,6 +29,8 @@ ROADMAP_START = "<!-- progress:roadmap:start -->"
 ROADMAP_END = "<!-- progress:roadmap:end -->"
 STATE_START = "<!-- progress:state:start -->"
 STATE_END = "<!-- progress:state:end -->"
+RESULTS_START = "<!-- progress:results:start -->"
+RESULTS_END = "<!-- progress:results:end -->"
 
 DEFAULT_NEXT_FOCUS = [
     "Repository structure cleanup: reduce root-level script clutter and group workflows by purpose.",
@@ -180,6 +183,73 @@ def update_roadmap(entries: list[ProgressEntry], next_focus: list[str]) -> None:
     ROADMAP_PATH.write_text(text, encoding="utf-8")
 
 
+def _load_grid_ids() -> list[str]:
+    """Read grid IDs from regions.yaml (all regions)."""
+    import yaml
+
+    if not REGIONS_YAML_PATH.exists():
+        return []
+    data = yaml.safe_load(REGIONS_YAML_PATH.read_text(encoding="utf-8"))
+    grid_ids: list[str] = []
+    for region in (data.get("regions") or {}).values():
+        for gid in (region.get("grids") or {}):
+            grid_ids.append(gid)
+    return grid_ids
+
+
+def _read_grid_metrics(grid_id: str) -> dict[str, str] | None:
+    """Read presence_metrics.csv for a grid. Returns None if not available."""
+    csv_path = ROOT / "results" / grid_id / "presence_metrics.csv"
+    if not csv_path.exists():
+        return None
+    import csv
+
+    with csv_path.open(encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        row = next(reader, None)
+    if row is None:
+        return None
+    return {
+        "precision": f"{float(row['precision']):.4f}",
+        "recall": f"{float(row['recall']):.4f}",
+        "f1": f"{float(row['f1']):.4f}",
+    }
+
+
+def refresh_results() -> None:
+    """Read metrics from results/ and update the results table in STATUS.md."""
+    grid_ids = _load_grid_ids()
+    if not grid_ids:
+        print("[SKIP] No grids found in regions.yaml")
+        return
+
+    table_lines = [
+        "| Grid | Precision | Recall | F1 | Status |",
+        "|------|-----------|--------|----|--------|",
+    ]
+    found = 0
+    for gid in grid_ids:
+        metrics = _read_grid_metrics(gid)
+        if metrics is None:
+            table_lines.append(f"| {gid} | — | — | — | not evaluated |")
+        else:
+            found += 1
+            table_lines.append(
+                f"| {gid} | {metrics['precision']} | {metrics['recall']} | {metrics['f1']} | evaluated |"
+            )
+
+    text = STATUS_PATH.read_text(encoding="utf-8")
+    text = replace_or_insert_block(
+        text=text,
+        start_marker=RESULTS_START,
+        end_marker=RESULTS_END,
+        block_title="## Evaluation Results Summary",
+        body_lines=table_lines,
+    )
+    STATUS_PATH.write_text(text, encoding="utf-8")
+    print(f"[RESULTS] {found}/{len(grid_ids)} grids with metrics → {STATUS_PATH}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Record progress and refresh roadmap/status")
     parser.add_argument("--summary", help="Human-written progress summary")
@@ -191,6 +261,11 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=None,
         help="Replace the current next-focus list. Pass multiple times for multiple bullets.",
+    )
+    parser.add_argument(
+        "--refresh-results",
+        action="store_true",
+        help="Read results/<grid>/presence_metrics.csv and refresh the results table in STATUS.md",
     )
     return parser.parse_args()
 
@@ -217,6 +292,9 @@ def main() -> None:
     save_progress_log(entries, next_focus)
     update_status(entries, next_focus)
     update_roadmap(entries, next_focus)
+
+    if args.refresh_results:
+        refresh_results()
 
     if new_entry is not None:
         print(f"[RECORDED] {new_entry.summary}")
