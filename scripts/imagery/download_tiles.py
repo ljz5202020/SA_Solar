@@ -97,17 +97,35 @@ def download_tile(spec, col, row, out_path: Path, timeout=DEFAULT_TIMEOUT):
         dst.write(data)
 
 
-def download_grid(grid_id: str, dry_run: bool = False):
+def download_grid(grid_id: str, dry_run: bool = False, tile_mask: set | None = None):
+    """Download tiles for a grid.
+
+    Args:
+        grid_id: Grid identifier.
+        dry_run: Only print info, don't download.
+        tile_mask: Optional set of (col, row) tuples to download.
+                   If None, download all tiles.
+    """
     grid_id = normalize_grid_id(grid_id)
     spec = get_grid_spec(grid_id)
 
     tiles_dir = Path(__file__).resolve().parent.parent.parent / "tiles" / grid_id
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
-    total = spec.n_cols * spec.n_rows
+    total_all = spec.n_cols * spec.n_rows
+    if tile_mask is not None:
+        tiles_to_download = sorted(tile_mask)
+        total = len(tiles_to_download)
+        mode = f"masked ({total}/{total_all} tiles)"
+    else:
+        tiles_to_download = [(col, row) for col in range(spec.n_cols) for row in range(spec.n_rows)]
+        total = total_all
+        mode = f"all ({total} tiles)"
+
     print(f"Grid: {grid_id}")
     print(f"  Bounds: ({spec.xmin:.6f}, {spec.ymin:.6f}) → ({spec.xmax:.6f}, {spec.ymax:.6f})")
-    print(f"  Tiles: {spec.n_cols} cols × {spec.n_rows} rows = {total}")
+    print(f"  Tiles: {spec.n_cols} cols × {spec.n_rows} rows = {total_all}")
+    print(f"  Download: {mode}")
     print(f"  WMS Layer: {WMS_LAYER}")
     print(f"  Output: {tiles_dir}")
 
@@ -118,30 +136,29 @@ def download_grid(grid_id: str, dry_run: bool = False):
     skipped = 0
     errors = 0
 
-    for col in range(spec.n_cols):
-        for row in range(spec.n_rows):
-            tile_name = f"{grid_id}_{col}_{row}_geo.tif"
-            out_path = tiles_dir / tile_name
+    for col, row in tiles_to_download:
+        tile_name = f"{grid_id}_{col}_{row}_geo.tif"
+        out_path = tiles_dir / tile_name
 
-            if out_path.exists():
-                skipped += 1
-                continue
+        if out_path.exists():
+            skipped += 1
+            continue
 
+        try:
+            download_tile(spec, col, row, out_path)
+            downloaded += 1
+            print(f"  [{downloaded + skipped}/{total}] {tile_name}")
+        except Exception as e:
+            errors += 1
+            print(f"  [ERROR] {tile_name}: {e}")
+            time.sleep(3)
             try:
-                download_tile(spec, col, row, out_path)
+                download_tile(spec, col, row, out_path, timeout=600)
                 downloaded += 1
-                print(f"  [{downloaded + skipped}/{total}] {tile_name}")
-            except Exception as e:
-                errors += 1
-                print(f"  [ERROR] {tile_name}: {e}")
-                time.sleep(3)
-                try:
-                    download_tile(spec, col, row, out_path, timeout=600)
-                    downloaded += 1
-                    errors -= 1
-                    print(f"  [RETRY OK] {tile_name}")
-                except Exception as e2:
-                    print(f"  [RETRY FAIL] {tile_name}: {e2}")
+                errors -= 1
+                print(f"  [RETRY OK] {tile_name}")
+            except Exception as e2:
+                print(f"  [RETRY FAIL] {tile_name}: {e2}")
 
     print(f"\n[DONE] {grid_id}: downloaded={downloaded}, skipped={skipped}, errors={errors}")
 

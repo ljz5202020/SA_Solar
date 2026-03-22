@@ -1,9 +1,16 @@
 """
 Download full-resolution tiles for grids selected in a preview-review batch.
 
+Supports tile-level OSM building mask: only download tiles that contain
+buildings (+ neighbor buffer), skipping empty wasteland tiles.
+
 Examples:
   python scripts/imagery/download_reviewed_grids.py \
-    --batch-dir results/grid_previews/batch_001
+    --batch-dir results/grid_previews/batch_002
+
+  # With OSM tile mask (selective download):
+  python scripts/imagery/download_reviewed_grids.py \
+    --batch-dir results/grid_previews/batch_002 --use-tile-mask
 
   python scripts/imagery/download_reviewed_grids.py \
     --batch-dir results/grid_previews/batch_001 \
@@ -21,9 +28,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+import pandas as pd
+
 from scripts.imagery.download_tiles import download_grid
 
 DEFAULT_DECISIONS = ("keep",)
+DEFAULT_TILE_MASK = Path(__file__).resolve().parent.parent.parent / "cache" / "tile_download_mask.csv"
 
 
 def load_grid_ids(batch_dir: Path, decisions: tuple[str, ...]) -> list[str]:
@@ -49,6 +59,20 @@ def load_grid_ids(batch_dir: Path, decisions: tuple[str, ...]) -> list[str]:
     return grid_ids
 
 
+def load_tile_mask(mask_path: Path, grid_ids: list[str]) -> dict[str, set[tuple[int, int]]]:
+    """Load tile download mask CSV and return per-grid tile sets."""
+    if not mask_path.exists():
+        raise FileNotFoundError(f"tile mask not found: {mask_path}")
+
+    df = pd.read_csv(mask_path)
+    grid_set = set(grid_ids)
+    masks: dict[str, set[tuple[int, int]]] = {}
+    for _, row in df[df["grid_id"].isin(grid_set)].iterrows():
+        gid = row["grid_id"]
+        masks.setdefault(gid, set()).add((int(row["col"]), int(row["row"])))
+    return masks
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Download full-resolution tiles for grids chosen in browser review output"
@@ -64,6 +88,17 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=list(DEFAULT_DECISIONS),
         help="Decision labels to include, e.g. keep review",
+    )
+    parser.add_argument(
+        "--use-tile-mask",
+        action="store_true",
+        help="Use OSM building tile mask for selective download",
+    )
+    parser.add_argument(
+        "--tile-mask-path",
+        type=Path,
+        default=DEFAULT_TILE_MASK,
+        help="Path to tile_download_mask.csv",
     )
     parser.add_argument(
         "--dry",
@@ -90,6 +125,20 @@ def main() -> None:
         print("[INFO] no matching grids found")
         return
 
+    # Load tile mask if requested
+    tile_masks: dict[str, set[tuple[int, int]]] = {}
+    if args.use_tile_mask:
+        tile_masks = load_tile_mask(args.tile_mask_path, grid_ids)
+        grids_with_mask = [g for g in grid_ids if g in tile_masks]
+        grids_no_mask = [g for g in grid_ids if g not in tile_masks]
+        total_tiles = sum(len(v) for v in tile_masks.values())
+        print(f"[INFO] tile mask: {len(grids_with_mask)} grids with buildings "
+              f"({total_tiles} tiles)")
+        if grids_no_mask:
+            print(f"[INFO] tile mask: {len(grids_no_mask)} grids with NO buildings "
+                  f"in OSM (skipped): {', '.join(grids_no_mask)}")
+        grid_ids = grids_with_mask
+
     print("[INFO] grid_ids=" + ", ".join(grid_ids))
     if args.dry:
         return
@@ -99,8 +148,10 @@ def main() -> None:
 
     def run_one(job: tuple[int, str]) -> str:
         idx, grid_id = job
-        print(f"\n=== [{idx}/{len(grid_ids)}] {grid_id} ===", flush=True)
-        download_grid(grid_id, dry_run=False)
+        mask = tile_masks.get(grid_id)
+        mask_info = f" (mask: {len(mask)} tiles)" if mask else " (all tiles)"
+        print(f"\n=== [{idx}/{len(grid_ids)}] {grid_id}{mask_info} ===", flush=True)
+        download_grid(grid_id, dry_run=False, tile_mask=mask)
         return grid_id
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
