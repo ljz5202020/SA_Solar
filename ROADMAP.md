@@ -3,14 +3,16 @@
 ## Execution Track
 <!-- progress:roadmap:start -->
 ### Recently Completed
+- 2026-03-20: V2 SAM2 annotation + retrain: 3 grids re-annotated with SAM2.1 (GeoSAM/QGIS), retrained model (val_AP50=0.6889), primary metric switched to F1@IoU0.5
+- 2026-03-20: Model-assisted annotation script (`scripts/annotations/export_hints.py`): confidence-tiered bbox hints for QGIS
+- 2026-03-20: GT resolution updated: evaluation now uses SAM2 annotations as ground truth
+- 2026-03-18: Add annotation cleanup, docs restructure, JHB fine-tuned evaluation, and project configs
 - 2026-03-18: Restructure project: move shared utils to core/, group scripts by domain
-- 2026-03-18: Added low-resolution grid preview batching for G1240+ screening and contact-sheet generation.
-- 2026-03-18: Added browser review UI for keep/exclude/review decisions with WSL-friendly LAN access hints.
-- 2026-03-18: Completed the first 100-grid preview batch from G1240 and finished manual screening for that batch.
 
 ### Next Up
-- Repository structure cleanup: reduce root-level script clutter and group workflows by purpose.
-- Export reviewed keep/exclude decisions into a reusable grid manifest for later tile downloads.
+- Semi-automatic annotation workflow: model detect → QGIS bbox hints → SAM2 click-segment → expand training set
+- Expand annotation to additional Cape Town grids using export_hints.py workflow
+- FP reduction: add hard negatives, raise confidence threshold
 <!-- progress:roadmap:end -->
 
 ## V0: Baseline Detection Pipeline — DONE
@@ -64,7 +66,7 @@ Fine-tune Mask R-CNN on 257 Cape Town annotations across 3 grids.
 - [ ] Size-stratified recall diagnostics focused on G1189 small panels (<20m²)
 
 ### Training Data
-- G1238: 123 valid polygons (layer `g1238__solar_panel__cape_town_g1238_`)
+- G1238: 248 valid polygons (layer `SAM_Residential_merged`, SAM2.1 detailed segmentation)
 - G1189: 58 polygons (from combined GPKG, Name prefix filter)
 - G1190: 76 polygons (from combined GPKG, Name prefix filter)
 - Total: 257 polygons across 126 source tiles (42 per grid)
@@ -147,10 +149,51 @@ All runs below used:
 
 ---
 
-## V2: Future Directions (not started)
+## V2: SAM2 Annotation & Retrain — COMPLETE
 
-- [ ] Include additional Cape Town grids (G0854, G0855, G0910, etc.) if tiles downloaded
+Re-annotated all 3 Cape Town grids with SAM2.1 (GeoSAM plugin in QGIS), retrained Mask R-CNN, switched primary evaluation metric to F1@IoU0.5.
+
+### Completed
+- [x] SAM2.1 re-annotation: G1238 (248), G1189 (109), G1190 (99) — total 456 polygons, all T1 quality
+- [x] Annotation file naming convention: `{GridID}_SAM2_{YYMMDD}.gpkg`
+- [x] COCO export with SAM2 annotations (`data/coco_sam2_260320`)
+- [x] Retrain: val_AP50 = 0.6889 (V1: 0.4205, **+0.268**)
+- [x] GT resolution: `core/grid_utils.py` auto-selects SAM2 annotations for evaluation
+- [x] Full-grid evaluation on all 3 grids with SAM2 GT
+- [x] Primary metric switched from F1@IoU0.1 to **F1@IoU0.5**
+- [x] Model-assisted annotation script (`scripts/annotations/export_hints.py`)
+
+### Training Data
+- G1238: 248 polygons (SAM2.1, layer `SAM_Residential_merged`)
+- G1189: 109 polygons (SAM2.1, layer `sam_residential_g1189_mosa_109_rgb255105180`)
+- G1190: 99 polygons (SAM2.1, layer `SAM_Residential_20260320_221905`)
+- Total: 456 polygons across 126 source tiles
+- Chips after balancing: train = 820 (410 pos, 410 neg), val = 204 (102 pos, 102 neg)
+
+### Best Checkpoint
+`checkpoints/v2_sam2_260320/best_model.pth` (val_AP50=0.6889, epoch 18)
+
+### Full-Grid Results (SAM2 GT, installation profile)
+
+| Grid | P@IoU0.5 | R@IoU0.5 | **F1@IoU0.5** | mean IoU | IoU>=0.5 rate |
+|------|----------|----------|---------------|----------|---------------|
+| G1238 | 0.509 | 0.569 | 0.537 | 0.691 | 81.0% |
+| G1190 | 0.559 | 0.717 | **0.628** | 0.742 | 87.7% |
+| G1189 | 0.555 | 0.560 | 0.557 | 0.729 | 87.1% |
+
+### Key Findings
+- Recall greatly improved vs V1; precision is now the bottleneck (~0.63 across all grids)
+- SAM2 GT is stricter than legacy annotations — F1 numbers are lower but more honest
+- Footprint quality high: mean IoU 0.69-0.74, mean Dice 0.80-0.84
+- TP confidence (0.977) well-separated from FP confidence (0.865) — enables tiered hint workflow
+
+---
+
+## V3: Future Directions (not started)
+
+- [ ] Semi-automatic annotation: expand to additional Cape Town grids via export_hints.py + SAM2 workflow
+- [ ] FP reduction: hard negative mining, confidence threshold tuning
+- [ ] Detector + SAM2 inference pipeline (bbox detection → SAM2 mask refinement)
 - [ ] JHB annotations + fine-tuning for cross-city generalization
-- [ ] 2025 satellite imagery evaluation
-- [ ] Stronger backbone (Swin Transformer) if large-array IoU still stalls
+- [ ] Stronger backbone (Swin Transformer, ConvNeXt) if F1@IoU0.5 plateaus
 - [ ] Active learning: prioritize annotation on high-uncertainty tiles

@@ -46,6 +46,22 @@ def normalize_grid_id(grid_id: str) -> str:
     return str(grid_id).strip().upper()
 
 
+# GT file resolution: prefer SAM2 annotations over legacy files
+_GT_SOURCES = {
+    "G1238": ANNOTATIONS_DIR / "G1238_SAM2_260320.gpkg",
+    "G1189": ANNOTATIONS_DIR / "G1189_SAM2_260320.gpkg",
+    "G1190": ANNOTATIONS_DIR / "G1190_SAM2_260320.gpkg",
+}
+
+
+def _resolve_gt_gpkg(grid_id: str) -> Path:
+    """Return the best available GT file for a grid."""
+    sam2 = _GT_SOURCES.get(grid_id)
+    if sam2 and sam2.exists():
+        return sam2
+    return ANNOTATIONS_DIR / f"{grid_id}.gpkg"
+
+
 def get_grid_paths(grid_id: str, output_subdir: str | None = None) -> GridPaths:
     grid_id = normalize_grid_id(grid_id)
     output_dir = BASE_DIR / "results" / grid_id
@@ -55,7 +71,7 @@ def get_grid_paths(grid_id: str, output_subdir: str | None = None) -> GridPaths:
         grid_id=grid_id,
         tiles_dir=TILES_ROOT / grid_id,
         output_dir=output_dir,
-        gt_gpkg=ANNOTATIONS_DIR / f"{grid_id}.gpkg",
+        gt_gpkg=_resolve_gt_gpkg(grid_id),
         gt_geojson=ANNOTATIONS_DIR / f"{grid_id.lower()}.geojson",
     )
 

@@ -39,19 +39,19 @@ ANNOTATIONS_DIR = BASE_DIR / "data" / "annotations"
 
 GRID_SOURCES = {
     "G1238": {
-        "file": ANNOTATIONS_DIR / "G1238.gpkg",
-        "layer": "g1238__solar_panel__cape_town_g1238_",
-        "filter": None,  # use all features in the layer
+        "file": ANNOTATIONS_DIR / "G1238_SAM2_260320.gpkg",
+        "layer": "SAM_Residential_merged",
+        "filter": None,
     },
     "G1189": {
-        "file": ANNOTATIONS_DIR / "solarpanel_g0001_g1190.gpkg",
-        "layer": "cape_town_g0001_g1190",
-        "filter": lambda df: df[df["Name"].str.startswith("G1189_")],
+        "file": ANNOTATIONS_DIR / "G1189_SAM2_260320.gpkg",
+        "layer": "sam_residential_g1189_mosa_109_rgb255105180",
+        "filter": None,
     },
     "G1190": {
-        "file": ANNOTATIONS_DIR / "solarpanel_g0001_g1190.gpkg",
-        "layer": "cape_town_g0001_g1190",
-        "filter": lambda df: df[df["Name"].str.startswith("G1190_")],
+        "file": ANNOTATIONS_DIR / "G1190_SAM2_260320.gpkg",
+        "layer": "SAM_Residential_20260320_221905",
+        "filter": None,
     },
 }
 

@@ -32,19 +32,35 @@ OUTPUT_DIR = ANNOTATIONS_DIR / "cleaned"
 # 数据源定义
 # ════════════════════════════════════════════════════════════════════════
 
-# G1238: QGIS 标注，已是 installation-level
+# G1238: SAM2.1 精细切割
 G1238_SOURCE = {
-    "file": ANNOTATIONS_DIR / "G1238.gpkg",
-    "layer": "g1238__solar_panel__cape_town_g1238_",
+    "file": ANNOTATIONS_DIR / "G1238_SAM2_260320.gpkg",
+    "layer": "SAM_Residential_merged",
     "grid_id": "G1238",
-    "merge_needed": False,  # 已是 installation-level
+    "merge_needed": False,
 }
 
-# Google Earth 批量导出：多网格混合，panel-level 需合并
+# G1189: SAM2.1 精细切割
+G1189_SOURCE = {
+    "file": ANNOTATIONS_DIR / "G1189_SAM2_260320.gpkg",
+    "layer": "sam_residential_g1189_mosa_109_rgb255105180",
+    "grid_id": "G1189",
+    "merge_needed": False,
+}
+
+# G1190: SAM2.1 精细切割
+G1190_SOURCE = {
+    "file": ANNOTATIONS_DIR / "G1190_SAM2_260320.gpkg",
+    "layer": "SAM_Residential_20260320_221905",
+    "grid_id": "G1190",
+    "merge_needed": False,
+}
+
+# Google Earth 批量导出（legacy, kept for reference）
 GE_SOURCE = {
     "file": ANNOTATIONS_DIR / "solarpanel_g0001_g1190.gpkg",
-    "layer": None,  # default layer
-    "merge_needed": True,  # 同 Name 的多面板需 union
+    "layer": None,
+    "merge_needed": True,
 }
 
 # JHB: 独立 GPKG，已是 installation-level
@@ -142,24 +158,19 @@ def assign_land_use(annotations: gpd.GeoDataFrame, sseg: gpd.GeoDataFrame,
 # 清洗逻辑
 # ════════════════════════════════════════════════════════════════════════
 
-def process_g1238() -> gpd.GeoDataFrame:
-    """处理 G1238：已是 installation-level，只需统一 ID"""
-    src = G1238_SOURCE
+def process_sam2_grid(src: dict) -> gpd.GeoDataFrame:
+    """处理 SAM2 标注：统一 ID，兼容 segment_id / panel_id"""
+    grid_id = src["grid_id"]
     gdf = gpd.read_file(src["file"], layer=src["layer"])
-    print(f"[G1238] Loaded {len(gdf)} polygons from {src['layer']}")
+    print(f"[{grid_id}] Loaded {len(gdf)} polygons from {src['layer']}")
 
-    # 统一字段
-    gdf = gdf.sort_values("panel_id").reset_index(drop=True)
-    gdf["annotation_id"] = [f"G1238_{i+1:03d}" for i in range(len(gdf))]
-    gdf["grid_id"] = "G1238"
-    gdf["source"] = "qgis_aerial"
-
-    # 去掉 Z 坐标（如有）
-    gdf["geometry"] = gdf.geometry.map(
-        lambda g: gpd.GeoSeries([g]).set_crs(gdf.crs).geometry.iloc[0]
-    )
-
-    gdf["num_parts"] = 1  # G1238 已是 installation-level，每个都是单多边形
+    # 兼容不同 ID 字段名
+    sort_col = "segment_id" if "segment_id" in gdf.columns else "panel_id"
+    gdf = gdf.sort_values(sort_col).reset_index(drop=True)
+    gdf["annotation_id"] = [f"{grid_id}_{i+1:03d}" for i in range(len(gdf))]
+    gdf["grid_id"] = grid_id
+    gdf["source"] = "sam2_qgis"
+    gdf["num_parts"] = 1
 
     return gdf[["annotation_id", "grid_id", "source", "num_parts", "geometry"]]
 
@@ -238,6 +249,117 @@ def process_jhb() -> dict[str, gpd.GeoDataFrame]:
 
 
 # ════════════════════════════════════════════════════════════════════════
+# 跨 Grid 边界去重
+# ════════════════════════════════════════════════════════════════════════
+
+def dedup_cross_grid(
+    all_grids: dict[str, gpd.GeoDataFrame],
+    centroid_dist_m: float = 15.0,
+    iou_thresh: float = 0.3,
+) -> dict[str, gpd.GeoDataFrame]:
+    """
+    去除跨 Grid 边界的重复标注。
+
+    相邻 Grid 的 mosaic 影像有 ~28m 重叠带，同一太阳能板可能在两侧都被标注，
+    其中一个可能被影像边缘截断而面积偏小。
+
+    逻辑：
+    1. 合并所有 grid 标注到统一投影坐标系
+    2. 找质心距离 < centroid_dist_m 且 IoU > iou_thresh 的跨 grid 多边形对
+    3. 保留面积更大的（完整的），标记面积小的为待删除
+    4. 从各 grid 的 GeoDataFrame 中移除被标记的多边形
+    """
+    grid_ids = sorted(all_grids.keys())
+    if len(grid_ids) < 2:
+        return all_grids
+
+    # 合并到投影坐标系
+    metric_crs = "EPSG:32734"
+    frames = []
+    for gid in grid_ids:
+        gdf = all_grids[gid].copy()
+        if gdf.crs is None:
+            gdf = gdf.set_crs("EPSG:4326")
+        gdf = gdf.to_crs(metric_crs)
+        gdf["_src_grid"] = gid
+        gdf["_src_idx"] = gdf.index
+        gdf["_area_m2"] = gdf.geometry.area
+        gdf["_cx"] = gdf.geometry.centroid.x
+        gdf["_cy"] = gdf.geometry.centroid.y
+        frames.append(gdf)
+
+    combined = pd.concat(frames, ignore_index=True)
+
+    # 找跨 grid 重复对
+    drop_indices = set()  # (grid_id, original_index) to remove
+    n = len(combined)
+    total_dups = 0
+
+    for i in range(n):
+        if (combined.iloc[i]["_src_grid"], combined.iloc[i]["_src_idx"]) in drop_indices:
+            continue
+        for j in range(i + 1, n):
+            if (combined.iloc[j]["_src_grid"], combined.iloc[j]["_src_idx"]) in drop_indices:
+                continue
+            # Only check cross-grid pairs
+            if combined.iloc[i]["_src_grid"] == combined.iloc[j]["_src_grid"]:
+                continue
+
+            # Quick centroid distance filter
+            dx = combined.iloc[i]["_cx"] - combined.iloc[j]["_cx"]
+            dy = combined.iloc[i]["_cy"] - combined.iloc[j]["_cy"]
+            dist = (dx * dx + dy * dy) ** 0.5
+            if dist > centroid_dist_m:
+                continue
+
+            # IoU check
+            gi = combined.iloc[i].geometry
+            gj = combined.iloc[j].geometry
+            if not gi.intersects(gj):
+                continue
+            inter = gi.intersection(gj).area
+            union = gi.union(gj).area
+            iou = inter / union if union > 0 else 0
+            if iou < iou_thresh:
+                continue
+
+            # Duplicate found — drop the smaller one
+            area_i = combined.iloc[i]["_area_m2"]
+            area_j = combined.iloc[j]["_area_m2"]
+            if area_i >= area_j:
+                victim = (combined.iloc[j]["_src_grid"], combined.iloc[j]["_src_idx"])
+            else:
+                victim = (combined.iloc[i]["_src_grid"], combined.iloc[i]["_src_idx"])
+            drop_indices.add(victim)
+            total_dups += 1
+
+            grid_i = combined.iloc[i]["_src_grid"]
+            grid_j = combined.iloc[j]["_src_grid"]
+            print(f"  dup: {grid_i} vs {grid_j}, "
+                  f"dist={dist:.1f}m, IoU={iou:.2f}, "
+                  f"areas={area_i:.1f}/{area_j:.1f} m2 → drop from {victim[0]}")
+
+    if total_dups == 0:
+        print("  No cross-grid duplicates found.")
+        return all_grids
+
+    # Remove duplicates from each grid's GeoDataFrame
+    result = {}
+    for gid in grid_ids:
+        gdf = all_grids[gid]
+        to_drop = [idx for (g, idx) in drop_indices if g == gid]
+        if to_drop:
+            before = len(gdf)
+            gdf = gdf.drop(index=to_drop).reset_index(drop=True)
+            print(f"  [{gid}] removed {before - len(gdf)} boundary duplicates")
+            # Re-number annotation IDs
+            gdf["annotation_id"] = [f"{gid}_{i+1:03d}" for i in range(len(gdf))]
+        result[gid] = gdf
+    print(f"  Total removed: {total_dups} duplicates across grid boundaries")
+    return result
+
+
+# ════════════════════════════════════════════════════════════════════════
 # 主流程
 # ════════════════════════════════════════════════════════════════════════
 
@@ -255,12 +377,18 @@ def main():
     # 收集所有网格
     all_grids: dict[str, gpd.GeoDataFrame] = {}
 
-    # 1. G1238
-    all_grids["G1238"] = process_g1238()
+    # 1. SAM2 标注 (G1238, G1189, G1190)
+    for src in [G1238_SOURCE, G1189_SOURCE, G1190_SOURCE]:
+        if src["file"].exists():
+            all_grids[src["grid_id"]] = process_sam2_grid(src)
 
-    # 2. Google Earth 导出（多网格）
+    # 2. Google Earth 导出（多网格，不覆盖已有 SAM2 标注）
     ge_grids = process_google_earth()
-    all_grids.update(ge_grids)
+    for gid, gdf in ge_grids.items():
+        if gid not in all_grids:
+            all_grids[gid] = gdf
+        else:
+            print(f"  [{gid}] skipped GE source — SAM2 annotation takes priority")
 
     # 3. JHB
     jhb_grids = process_jhb()
@@ -275,7 +403,11 @@ def main():
         counts = all_grids[grid_id]["land_use"].value_counts().to_dict()
         print(f"  [{grid_id}] {counts}")
 
-    # 5. 汇总
+    # 5. 跨 Grid 边界去重
+    print("\n[dedup] Removing cross-grid boundary duplicates...")
+    all_grids = dedup_cross_grid(all_grids)
+
+    # 6. 汇总
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
@@ -288,7 +420,7 @@ def main():
         print(f"  {grid_id}: {n:>4d} installations  {lu}")
     print(f"  {'TOTAL':>6s}: {total:>4d} installations")
 
-    # 6. 写出
+    # 7. 写出
     if args.dry_run:
         print("\n[DRY RUN] No files written.")
         return
@@ -298,7 +430,7 @@ def main():
         gdf.to_file(out_path, driver="GPKG")
         print(f"  Written: {out_path} ({len(gdf)} features)")
 
-    # 7. 写合并版本（方便查看）
+    # 8. 写合并版本（方便查看）
     all_combined = pd.concat(all_grids.values(), ignore_index=True)
     all_combined = gpd.GeoDataFrame(all_combined, crs="EPSG:4326")
     combined_path = OUTPUT_DIR / "all_annotations_cleaned.gpkg"

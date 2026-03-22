@@ -8,7 +8,7 @@ V1.2 起，标注任务正式定义为 **installation footprint**（安装级轮
 
 | 文件 | 来源 | Grid 范围 | 状态 |
 |------|------|-----------|------|
-| G1238.gpkg | QGIS + Cape Town 2025.01 航测图 | G1238 | 已完成 |
+| G1238_detailed.gpkg | SAM2.1 (GeoSAM/QGIS) 精细切割 | G1238 | 已完成（248 polygons，替代原 G1238.gpkg） |
 | solarpanel_g0001_g1190.gpkg | Google Earth 网页端标注 → QGIS 转换 | G0001-G1190 | 已完成（已人工校准位置偏移） |
 
 ## 标注规范

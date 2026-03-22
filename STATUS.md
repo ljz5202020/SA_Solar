@@ -1,39 +1,35 @@
 # Project Status — Cape Town Solar Panel Detection
 
-**Last Updated**: 2026-03-18
+**Last Updated**: 2026-03-20
 
 ## Current Phase
 
-V1.2 — Evaluation Profile & Annotation Alignment (COMPLETE; installation profile validated on GPU for G1189/G1190/G1238)
+V2 — SAM2 Annotation & Retrain (COMPLETE; primary metric switched to F1@IoU0.5)
 
 ---
 
 ## Progress Tracker
 <!-- progress:status:start -->
 ### Recent Updates
+- 2026-03-20: V2 SAM2 annotation + retrain complete (val_AP50=0.6889, +0.268 vs V1)
+- 2026-03-20: Model-assisted annotation script for semi-auto QGIS workflow
+- 2026-03-20: Evaluation GT switched to SAM2 annotations; primary metric → F1@IoU0.5
+- 2026-03-18: Add annotation cleanup, docs restructure, JHB fine-tuned evaluation, and project configs
 - 2026-03-18: Restructure project: move shared utils to core/, group scripts by domain
-- 2026-03-18: Added low-resolution grid preview batching for G1240+ screening and contact-sheet generation.
-- 2026-03-18: Added browser review UI for keep/exclude/review decisions with WSL-friendly LAN access hints.
-- 2026-03-18: Completed the first 100-grid preview batch from G1240 and finished manual screening for that batch.
 
 ### Current Ops Focus
-- Repository structure cleanup: reduce root-level script clutter and group workflows by purpose.
-- Export reviewed keep/exclude decisions into a reusable grid manifest for later tile downloads.
+- Semi-automatic annotation: expand to more grids via export_hints.py + SAM2 click-segment
+- FP reduction: hard negative mining, confidence threshold tuning
 <!-- progress:status:end -->
 
-## Evaluation Results Summary
+## Evaluation Results Summary (V2, SAM2 GT, F1@IoU0.5)
 <!-- progress:results:start -->
-| Grid | Precision | Recall | F1 | Status |
-|------|-----------|--------|----|--------|
-| G1238 | 0.7273 | 0.8455 | 0.7820 | evaluated |
-| G1189 | 0.7188 | 0.7931 | 0.7541 | evaluated |
-| G1190 | 0.7922 | 0.8026 | 0.7974 | evaluated |
-| JHB01 | — | — | — | not evaluated |
-| JHB02 | — | — | — | not evaluated |
-| JHB03 | — | — | — | not evaluated |
-| JHB04 | — | — | — | not evaluated |
-| JHB05 | — | — | — | not evaluated |
-| JHB06 | — | — | — | not evaluated |
+| Grid | P@IoU0.5 | R@IoU0.5 | F1@IoU0.5 | mean IoU | Status |
+|------|----------|----------|-----------|----------|--------|
+| G1238 | 0.509 | 0.569 | 0.537 | 0.691 | evaluated |
+| G1190 | 0.559 | 0.717 | 0.628 | 0.742 | evaluated |
+| G1189 | 0.555 | 0.560 | 0.557 | 0.729 | evaluated |
+| JHB01–06 | — | — | — | — | not evaluated |
 <!-- progress:results:end -->
 
 ## V0: Baseline Detection Pipeline — COMPLETE
@@ -45,29 +41,13 @@ V1.2 — Evaluation Profile & Annotation Alignment (COMPLETE; installation profi
 | G1190 | — | 0.39 | — | Low recall |
 | JHB01–06 | — | 0.28 (macro) | — | Cross-city transfer |
 
-## V1: Cape Town Fine-Tune — MINIMUM V1 COMPLETE
+## V1: Cape Town Fine-Tune — SUPERSEDED BY V2
 
-Fine-tuned Mask R-CNN on 257 Cape Town annotations across 3 grids.
+Fine-tuned Mask R-CNN on 257 Cape Town annotations (legacy weak-supervision).
 
 **Best checkpoint**: `checkpoints/v1_ft_cs400_tileval_20260317_r4/best_model.pth` (val_AP50=0.4205)
 
-### Full-Grid Fine-Tuned Results (GPU-verified, installation profile)
-
-| Grid | F1@IoU0.3 |
-|------|-----------|
-| G1189 | 0.5950 |
-| G1190 | 0.6490 |
-| G1238 | 0.7789 |
-
-### Residual Issues
-
-- G1189 small-panel recall regressed: 0.3077 → 0.2308 (val split)
-- Post-training calibration sweep completed; inference bundle freeze still pending
-- Leave-one-grid-out cross-validation pending
-- JHB transfer evaluation not performed
-- Parameter freeze for v1 inference bundle pending
-
-Full val-split tables, training data/config, and size-stratified gains → see `ROADMAP.md`.
+Full details → see `ROADMAP.md` V1 section.
 
 ---
 
@@ -102,11 +82,27 @@ GPU integration test details → [`docs/experiment-archive/gpu-integration-test-
 
 ---
 
-## V2: Future Directions — NOT STARTED
+## V2: SAM2 Annotation & Retrain — COMPLETE
 
-- Additional Cape Town grids
-- JHB annotations + fine-tuning
-- 2025 satellite imagery evaluation
-- Stronger backbone (Swin Transformer)
+Re-annotated all 3 grids with SAM2.1 (GeoSAM/QGIS), 456 polygons total (T1 quality).
+
+**Best checkpoint**: `checkpoints/v2_sam2_260320/best_model.pth` (val_AP50=0.6889)
+
+| Metric | V1 | V2 | Change |
+|--------|-----|-----|--------|
+| val_AP50 | 0.4205 | 0.6889 | **+0.268** |
+| Annotations | 257 (T2) | 456 (T1 SAM2) | +77% |
+| Primary metric | F1@IoU0.1 | **F1@IoU0.5** | upgraded |
+
+Key: precision (~0.63) is now the bottleneck, not recall. Semi-auto annotation workflow ready for scaling.
+
+---
+
+## V3: Future Directions — NOT STARTED
+
+- Semi-auto annotation expansion to more grids
+- FP reduction (hard negatives, confidence tuning)
+- Detector + SAM2 inference pipeline
+- JHB cross-city transfer
+- Stronger backbone (Swin, ConvNeXt)
 - Active learning
-- Temporal analysis (installation time estimation)

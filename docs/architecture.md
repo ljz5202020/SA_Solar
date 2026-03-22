@@ -6,7 +6,7 @@
 data/
   task_grid.gpkg              — Grid 编号集合
   annotations/                — 弱监督标注（详见 annotations/README.md）
-    G1238.gpkg                — QGIS 航测图标注 (124 polygons, layer g1238__solar_panel__cape_town_g1238_)
+    G1238_detailed.gpkg       — SAM2.1 精细切割 (248 polygons, layer SAM_Residential_merged)
     solarpanel_g0001_g1190.gpkg — Google Earth 标注（已校准, G1189=58, G1190=76, 其余少量）
     ANNOTATION_SPEC.md        — V1.2 标注规范（installation footprint 定义）
     annotation_manifest.csv   — 标注 manifest (quality tier T1/T2, review status)

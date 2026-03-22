@@ -52,3 +52,12 @@ run_output.txt
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code config (local)
+.claude/
+
+# Local cache (OSM buildings, tile masks, etc.)
+cache/
+
+# Misc data files
+data/sseg_registration_geo.csv
